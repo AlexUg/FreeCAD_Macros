@@ -1,0 +1,113 @@
+
+
+__Name__ = 'PathAddToolsIntoPathJob'
+__Comment__ = 'Adds all tools from selected Tool Set to active Path Job'
+__Author__ = 'A.Ugnenko'
+__Version__ = '0.0.1'
+__Date__ = '2021-12-31'
+__License__ = 'FreeCAD'
+__Web__ = ''
+__Wiki__ = ''
+__Icon__ = ''
+__Status__ = 'Alpha'
+__Requires__ = 'FreeCAD >= v0.19'
+__Communication__ = 'ugnenko@mail.ru'
+__Files__ = ''
+__Help__ = '''
+	Adds all tools from selected Tool Set to active Path Job.
+'''
+
+
+import shutil
+import pathlib
+import json
+import PySide
+import FreeCAD
+import FreeCADGui as FCGui
+from FreeCAD import Console
+import Path
+import PathScripts
+import PathScripts.PathUtil as PathUtil
+import PathScripts.PathToolBitGui as PathToolBitGui
+import PathScripts.PathToolControllerGui as PathToolControllerGui
+import PathScripts.PathPreferences as PathPreferences
+import PathScripts.PathToolBit as PathToolBit
+
+
+def translate(context, text, disambig=None):
+    return PySide.QtCore.QCoreApplication.translate(context, text, disambig)
+
+
+def __printDebug__(o):
+    Console.PrintMessage('{}:\n'.format(str(o)))
+    if hasattr(o, '__dict__'):
+        Console.PrintMessage('{}\n'.format(str(o.__dict__.keys())))
+    if hasattr(o, 'Proxy') \
+        and o.Proxy is not None:
+        Console.PrintMessage('Proxy: {} => {}\n'.format(str(o.Proxy), str(o.Proxy.__dict__.keys())))
+
+
+def __processJob__(job):
+    
+    libfile = PathPreferences.lastFileToolLibrary()
+    if not pathlib.Path(libfile).is_file():
+        PySide.QtGui.QMessageBox.critical(None,
+                                            translate("PathAddToolsIntoPathJob", "Error"),
+                                            translate("PathAddToolsIntoPathJob", "Default Tool Set is not defined"))
+    
+    if hasattr(job, 'Operations'):
+        for op in job.Operations.Group:
+            if not op.ViewObject or not hasattr(op.ViewObject.Proxy, 'onDelete') or op.ViewObject.Proxy.onDelete(op.ViewObject, ()):
+                PathUtil.clearExpressionEngine(op)
+            job.Document.removeObject(op.Name)
+    if hasattr(job, 'Tools'):
+        for tc in job.Tools.Group:
+            if hasattr(tc.Tool, "Proxy"):
+                PathUtil.clearExpressionEngine(tc.Tool)
+                job.Document.removeObject(tc.Tool.Name)
+            PathUtil.clearExpressionEngine(tc)
+            tc.Proxy.onDelete(tc)
+            job.Document.removeObject(tc.Name)
+
+    if not hasattr(job, 'Tools'):
+        None
+    
+    with open(libfile) as fp:
+        library = json.load(fp)
+        for toolBit in library['tools']:
+            try:
+                nr = toolBit['nr']
+                bit = PathToolBit.findToolBit(toolBit['path'])
+                if bit:
+                    tool = PathToolBit.ToolBitFactory().CreateFrom(bit)
+                    tc = PathToolControllerGui.Create("TC: {}".format(tool.Label), tool, nr)
+                    job.Proxy.addToolController(tc)
+                else:
+                    FreeCAD.Console.PrintError("Could not find tool #{}: {}\n".format(nr, toolBit['path']))
+            except Exception as e:
+                msg = "Error loading tool: {} : {}\n".format(toolBit['path'], e)
+                FreeCAD.Console.PrintError(msg)
+    return job
+
+
+def execute():
+    docs = []
+    for cs in FCGui.Selection.getSelection():
+        if hasattr(cs, 'Proxy'):
+            if isinstance(cs.Proxy, PathScripts.PathJob.ObjectJob):
+                doc = __processJob__(cs).Document
+                if not (doc in docs):
+                    docs.append(doc)
+    if len(docs) > 0:
+        for doc in docs:
+            doc.recompute()
+    else:
+        PySide.QtGui.QMessageBox.critical(None,
+                                            translate("PathAddToolsIntoPathJob", "Error"),
+                                            translate("PathAddToolsIntoPathJob", "No Job selected"))
+    
+
+
+if __name__=='__main__':
+    execute()
+

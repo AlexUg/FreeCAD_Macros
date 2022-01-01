@@ -1,0 +1,135 @@
+
+
+__Name__ = 'PathCreateDrillsInToolSet'
+__Comment__ = 'Creates Drill Tools with length 10 mm and diameters from 0.1mm to 5mm with step 0.1mm'
+__Author__ = 'A.Ugnenko'
+__Version__ = '0.0.1'
+__Date__ = '2021-12-31'
+__License__ = 'FreeCAD'
+__Web__ = ''
+__Wiki__ = ''
+__Icon__ = ''
+__Status__ = 'Alpha'
+__Requires__ = 'FreeCAD >= v0.19'
+__Communication__ = 'ugnenko@mail.ru'
+__Files__ = ''
+__Help__ = '''
+	Creates Drill Tools with length 10 mm and diameters from 0.1mm to 5mm with step 0.1mm.
+'''
+
+
+import shutil
+import pathlib
+import json
+import PySide
+import FreeCAD
+import FreeCADGui as FCGui
+from FreeCAD import Console
+import Path
+import PathScripts
+import PathScripts.PathPreferences as PathPreferences
+import PathScripts.PathToolBitGui as TBGui
+import PathScripts.PathToolBit as TB
+
+
+def translate(context, text, disambig=None):
+    return PySide.QtCore.QCoreApplication.translate(context, text, disambig)
+
+
+def _printDebug(o):
+    Console.PrintMessage('{}:\n'.format(str(o)))
+    if hasattr(o, '__dict__'):
+        Console.PrintMessage('{}\n'.format(str(o.__dict__.keys())))
+    if hasattr(o, 'Proxy') \
+        and o.Proxy is not None:
+        Console.PrintMessage('Proxy: {} => {}\n'.format(str(o.Proxy), str(o.Proxy.__dict__.keys())))
+
+def __save_tools__(toolTablePath, tools = []):
+    library = {}
+    library['version'] = 1
+    library['tools'] = tools
+    with open(toolTablePath, 'w') as fp:
+        json.dump(library, fp, sort_keys=True, indent=2)
+    return library
+
+
+def execute():
+    
+    TooltableTypeJSON = translate("PathToolLibraryManager", "Tooltable JSON (*.fctl)")
+
+    toolTableName = PySide.QtGui.QFileDialog.getSaveFileName(None,
+                                                            translate("TooltableEditor", "Save toolbit library", None),
+                                                            PathPreferences.lastPathToolLibrary(),
+                                                            "{}".format(TooltableTypeJSON))
+
+    if not(toolTableName and toolTableName[0]):
+        return
+
+    toolTablePath = toolTableName[0] if toolTableName[0].endswith('.fctl') else "{}.fctl".format(toolTableName[0])
+    toolTableFile = pathlib.Path(toolTablePath)
+    if toolTableFile.is_file():
+        answer = PySide.QtGui.QMessageBox.warning(None,
+                                                  translate("PathCreateDrillsInToolSet", "Tools library already exists"),
+                                                  translate("PathCreateDrillsInToolSet", "It will be replaced. Continue?"),
+                                                  PySide.QtGui.QMessageBox.Cancel | PySide.QtGui.QMessageBox.Ok)
+        if answer != PySide.QtGui.QMessageBox.Ok:
+            return
+        
+    toolLocation = os.path.split(toolTablePath)[0]
+    
+    toolShapeName = TBGui.GetToolShapeFile()
+    if toolShapeName is None:
+        answer = PySide.QtGui.QMessageBox.question(None,
+                                                  translate("PathCreateDrillsInToolSet", "No tool shape selected"),
+                                                  translate("PathCreateDrillsInToolSet", "Use 'drill.fcstd' from 'Path' Workbench distribution?"),
+                                                  PySide.QtGui.QMessageBox.Cancel | PySide.QtGui.QMessageBox.Ok)
+        if answer != PySide.QtGui.QMessageBox.Ok:
+            return
+        drillToolShape = os.path.join(FreeCAD.getHomePath(), "Mod", "Path", "Tools", "Shape", "drill.fcstd")
+        if not pathlib.Path(drillToolShape).is_file():
+            PySide.QtGui.QMessageBox.critical(None,
+                                                  translate("PathCreateDrillsInToolSet", "Error"),
+                                                  translate("PathCreateDrillsInToolSet", "'drill.fcstd' was not found in 'Path' Workbench distribution"))
+        toolShapeName = os.path.join(toolLocation, 'drill.fcstd')
+        shutil.copyfile(drillToolShape, toolShapeName)
+   
+    toolName = os.path.split(toolShapeName)[1]
+    toolName = os.path.splitext(toolName)[0]
+    
+    tools = []
+    toolNr = 1
+    
+    startDia = None
+    endDia = None
+    
+    for d in range(3, 51, 1):
+        dia = d / 10;
+        
+        if startDia is None:
+            startDia = FreeCAD.Units.Quantity(dia, FreeCAD.Units.Length).UserString
+        endDia = FreeCAD.Units.Quantity(dia, FreeCAD.Units.Length).UserString
+        
+        fToolName = "{}_{}mm".format(toolName, str(dia))
+        tool = TB.ToolBitFactory().Create(name=fToolName)
+        tool.Proxy.unloadBitBody(tool)
+        tool.BitShape = toolShapeName
+        tool.Proxy.loadBitBody(tool)
+        tool.Label = fToolName
+        tool.Diameter = FreeCAD.Units.Quantity(dia, FreeCAD.Units.Length)
+        tool.Length = FreeCAD.Units.Quantity(10, FreeCAD.Units.Length)
+        toolPath = os.path.join(toolLocation, "{}.fctb".format(fToolName))
+        tool.Proxy.saveToFile(tool, toolPath)
+        
+        tools.append({'nr': toolNr, 'path': toolPath})
+        toolNr = toolNr + 1
+        
+        tool.Document.removeObject(tool.Name)
+        tool = None
+        
+    library = __save_tools__(toolTablePath, tools)
+    PySide.QtGui.QMessageBox.information(None, "Tools generated", "Diameters from {} to {}".format(startDia, endDia))
+
+
+if __name__=='__main__':
+    execute()
+

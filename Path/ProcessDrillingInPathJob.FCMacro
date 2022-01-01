@@ -1,0 +1,135 @@
+
+
+__Name__ = 'ProcessDrillingInPathJob'
+__Comment__ = 'Process and clone drilling operation in active Path Job'
+__Author__ = 'A.Ugnenko'
+__Version__ = '0.0.1'
+__Date__ = '2021-12-31'
+__License__ = 'FreeCAD'
+__Web__ = ''
+__Wiki__ = ''
+__Icon__ = ''
+__Status__ = 'Alpha'
+__Requires__ = 'FreeCAD >= v0.19'
+__Communication__ = 'ugnenko@mail.ru'
+__Files__ = ''
+__Help__ = '''
+	Process and clone drilling operation in active Path Job.
+'''
+
+
+import shutil
+import pathlib
+import json
+import PySide
+import FreeCAD
+import FreeCADGui as FCGui
+from FreeCAD import Console
+import Part
+import Path
+import PathScripts
+import PathScripts.PathJob as PathJob
+import PathScripts.PathOpGui as PathOpGui
+import PathScripts.PathDrilling as PathDrilling
+import PathScripts.PathDrillingGui as PathDrillingGui
+import PathScripts.PathUtils as PathUtils
+import PathScripts.PathCommands as PathCommands
+
+from PySide import QtCore
+
+
+def translate(context, text, disambig=None):
+    return PySide.QtCore.QCoreApplication.translate(context, text, disambig)
+
+
+def __printDebug__(o):
+    Console.PrintMessage('{}:\n'.format(str(o)))
+    if hasattr(o, '__dict__'):
+        Console.PrintMessage('{}\n'.format(str(o.__dict__.keys())))
+    if hasattr(o, 'Proxy') \
+        and o.Proxy is not None:
+        Console.PrintMessage('Proxy: {} => {}\n'.format(str(o.Proxy), str(o.Proxy.__dict__.keys())))
+
+
+def __processOperation__(op, faceDiameters, drillTools):
+    faces = faceDiameters.popitem()
+    diameter = faces[0]
+    if diameter in drillTools:
+        tool = drillTools[diameter]
+        disabledFaces = []
+        for base in op.Base:
+            drillPart = base[0]
+            drillFaces = base[1]
+            for f in drillFaces:
+                if not (f in faces[1]):
+                    disabledFaces.append('Clone.' + f)
+        op.Disabled = disabledFaces
+        op.ToolController = tool
+        op.OpToolDiameter = op.ToolController.Tool.Diameter
+    else:
+        if not op.ViewObject or not hasattr(op.ViewObject.Proxy, 'onDelete') or op.ViewObject.Proxy.onDelete(op.ViewObject, ()):
+            PathUtil.clearExpressionEngine(op)
+        job.Document.removeObject(op.Name)
+
+
+def __getFaceDiameters__(op):
+    faceDiameters = {}
+    for base in op.Base:
+        drillPart = base[0]
+        drillFaces = base[1]
+        for model in drillPart.Objects:
+            shape = model.Shape
+            for drillFace in drillFaces:
+                face = shape.getElement(drillFace)
+                faceDiameter = round(face.Surface.Radius * 2, 1)
+                if faceDiameter in faceDiameters:
+                    faceDiameters[faceDiameter].append(drillFace)
+                else:
+                    faceDiameters[faceDiameter] = [drillFace]
+    return faceDiameters
+
+
+def __getDrillTools__(job):
+    drillTools = {}
+    if hasattr(job, 'Tools'):
+        tools = job.Tools.Group
+        for tool in tools:
+            diameter = round(tool.Tool.Diameter.Value, 1)
+            drillTools[diameter] = tool
+    return drillTools
+
+
+def execute():
+    copyOp = PathCommands._CopyOperation()
+    if copyOp.IsActive() and (len(FreeCADGui.Selection.getSelection()) == 1):
+        op = FreeCADGui.Selection.getSelection()[0]
+        faceDiameters = __getFaceDiameters__(op)
+        if len(faceDiameters) > 0:
+            job = PathUtils.findParentJob(op)
+            drillTools = __getDrillTools__(job)
+            if len(drillTools) > 0:
+                __processOperation__(op, faceDiameters, drillTools)
+                jobname = job.Name
+                while len(faceDiameters) > 0:
+                    op = FreeCAD.ActiveDocument.copyObject(op, False)
+                    PathUtils.addToJob(op, jobname)
+                    __processOperation__(op, faceDiameters, drillTools)
+                FreeCAD.ActiveDocument.recompute()
+            else:
+                PySide.QtGui.QMessageBox.critical(None,
+                                                    translate("ProcessDrillingInPathJob", "Error"),
+                                                    translate("ProcessDrillingInPathJob", "Tools are not defined for Job"))
+        else:
+            PySide.QtGui.QMessageBox.critical(None,
+                                                translate("ProcessDrillingInPathJob", "Error"),
+                                                translate("ProcessDrillingInPathJob", "Drill Operation must refer to all drill faces"))
+    else:
+        PySide.QtGui.QMessageBox.critical(None,
+                                            translate("ProcessDrillingInPathJob", "Error"),
+                                            translate("ProcessDrillingInPathJob", "One Drill Operation must be selected"))
+    
+
+
+if __name__=='__main__':
+    execute()
+
